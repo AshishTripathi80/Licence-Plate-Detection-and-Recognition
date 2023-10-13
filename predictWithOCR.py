@@ -91,6 +91,9 @@ class DetectionPredictor(BasePredictor):
                     self.model.names[c] if self.args.hide_conf else f'{self.model.names[c]} {conf:.2f}')
                 ocr = getOCR(im0,xyxy)
                 if ocr != "":
+                    with open('car_license_plates.txt', 'a') as f:
+                        f.write(f'{ocr}\n')
+
                     label = ocr
                 self.annotator.box_label(xyxy, label, color=colors(c, True))
             if self.args.save_crop:
