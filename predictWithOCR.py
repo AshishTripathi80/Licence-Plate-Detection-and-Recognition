@@ -1,5 +1,3 @@
-# Ultralytics YOLO 🚀, GPL-3.0 license
-
 import hydra
 import torch
 import easyocr
@@ -9,22 +7,27 @@ from ultralytics.yolo.utils import DEFAULT_CONFIG, ROOT, ops
 from ultralytics.yolo.utils.checks import check_imgsz
 from ultralytics.yolo.utils.plotting import Annotator, colors, save_one_box
 
+# Dictionary to store car identifiers and detected license plates
+detected_plates = {}
+
+
 def getOCR(im, coors):
-    x,y,w, h = int(coors[0]), int(coors[1]), int(coors[2]),int(coors[3])
-    im = im[y:h,x:w]
+    x, y, w, h = int(coors[0]), int(coors[1]), int(coors[2]), int(coors[3])
+    im = im[y:h, x:w]
     conf = 0.2
 
-    gray = cv2.cvtColor(im , cv2.COLOR_RGB2GRAY)
+    gray = cv2.cvtColor(im, cv2.COLOR_RGB2GRAY)
     results = reader.readtext(gray)
     ocr = ""
 
     for result in results:
         if len(results) == 1:
             ocr = result[1]
-        if len(results) >1 and len(results[1])>6 and results[2]> conf:
+        if len(results) > 1 and len(result[1]) > 6 and result[2] > conf:
             ocr = result[1]
-    
+
     return str(ocr)
+
 
 class DetectionPredictor(BasePredictor):
 
@@ -46,7 +49,8 @@ class DetectionPredictor(BasePredictor):
 
         for i, pred in enumerate(preds):
             shape = orig_img[i].shape if self.webcam else orig_img.shape
-            pred[:, :4] = ops.scale_boxes(img.shape[2:], pred[:, :4], shape).round()
+            pred[:, :4] = ops.scale_boxes(
+                img.shape[2:], pred[:, :4], shape).round()
 
         return preds
 
@@ -65,7 +69,8 @@ class DetectionPredictor(BasePredictor):
 
         self.data_path = p
         # save_path = str(self.save_dir / p.name)  # im.jpg
-        self.txt_path = str(self.save_dir / 'labels' / p.stem) + ('' if self.dataset.mode == 'image' else f'_{frame}')
+        self.txt_path = str(self.save_dir / 'labels' / p.stem) + \
+            ('' if self.dataset.mode == 'image' else f'_{frame}')
         log_string += '%gx%g ' % im.shape[2:]  # print string
         self.annotator = self.get_annotator(im0)
 
@@ -80,8 +85,10 @@ class DetectionPredictor(BasePredictor):
         gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
         for *xyxy, conf, cls in reversed(det):
             if self.args.save_txt:  # Write to file
-                xywh = (ops.xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
-                line = (cls, *xywh, conf) if self.args.save_conf else (cls, *xywh)  # label format
+                xywh = (ops.xyxy2xywh(torch.tensor(xyxy).view(1, 4)) /
+                        gn).view(-1).tolist()  # normalized xywh
+                # label format
+                line = (cls, *xywh, conf) if self.args.save_conf else (cls, *xywh)
                 with open(f'{self.txt_path}.txt', 'a') as f:
                     f.write(('%g ' * len(line)).rstrip() % line + '\n')
 
@@ -89,18 +96,25 @@ class DetectionPredictor(BasePredictor):
                 c = int(cls)  # integer class
                 label = None if self.args.hide_labels else (
                     self.model.names[c] if self.args.hide_conf else f'{self.model.names[c]} {conf:.2f}')
-                ocr = getOCR(im0,xyxy)
-                if ocr != "":
-                    with open('car_license_plates.txt', 'a') as f:
-                        f.write(f'{ocr}\n')
+                ocr = getOCR(im0, xyxy)
+                # Unique identifier for the car (top-left coordinates and dimensions)
+                car_id = tuple(xyxy[:4])
 
+                if ocr != "":
+                    if car_id not in detected_plates:
+                        # Store the license plate for this car
+                        detected_plates[car_id] = ocr
+                        with open('car_license_plates.txt', 'a') as f:
+                            f.write(f'{ocr}\n')
                     label = ocr
                 self.annotator.box_label(xyxy, label, color=colors(c, True))
             if self.args.save_crop:
                 imc = im0.copy()
                 save_one_box(xyxy,
                              imc,
-                             file=self.save_dir / 'crops' / self.model.model.names[c] / f'{self.data_path.stem}.jpg',
+                             file=self.save_dir / 'crops' /
+                             self.model.model.names[c] /
+                             f'{self.data_path.stem}.jpg',
                              BGR=True)
 
         return log_string
@@ -108,13 +122,13 @@ class DetectionPredictor(BasePredictor):
 
 @hydra.main(version_base=None, config_path=str(DEFAULT_CONFIG.parent), config_name=DEFAULT_CONFIG.name)
 def predict(cfg):
+    reader = easyocr.Reader(['en'])  # Initialize the OCR reader
     cfg.model = cfg.model or "yolov8n.pt"
-    cfg.imgsz = check_imgsz(cfg.imgsz, min_dim=2)  # check image size
+    cfg.imgsz = check_imgsz(cfg.imgsz, min_dim=2)  # Check image size
     cfg.source = cfg.source if cfg.source is not None else ROOT / "assets"
     predictor = DetectionPredictor(cfg)
     predictor()
 
 
 if __name__ == "__main__":
-    reader = easyocr.Reader(['en'])
     predict()
