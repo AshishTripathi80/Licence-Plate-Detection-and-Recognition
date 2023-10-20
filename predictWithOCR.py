@@ -1,14 +1,31 @@
+# Ultralytics YOLO 🚀, GPL-3.0 license
+
+
 import hydra
 import torch
 import easyocr
 import cv2
+from traitlets import Int
 from ultralytics.yolo.engine.predictor import BasePredictor
 from ultralytics.yolo.utils import DEFAULT_CONFIG, ROOT, ops
 from ultralytics.yolo.utils.checks import check_imgsz
 from ultralytics.yolo.utils.plotting import Annotator, colors, save_one_box
+from datetime import datetime
+import sqlite3
+import re
+import pytz
 
-# Dictionary to store car identifiers and detected license plates
-detected_plates = {}
+def process_license_plate(ocr):
+    unique = set()
+
+    # Check if ocr has more than 6 characters and contains only alphanumeric characters
+    if len(ocr) >= 6 and ocr.isalnum():
+        if ocr not in unique:
+            # Remove spaces and special characters from ocr using regular expressions
+            ocr = re.sub(r'\W+', '', ocr)
+            unique.add(ocr)
+            return ocr
+    return ''
 
 
 def getOCR(im, coors):
@@ -23,14 +40,13 @@ def getOCR(im, coors):
     for result in results:
         if len(results) == 1:
             ocr = result[1]
-        if len(results) > 1 and len(result[1]) > 6 and result[2] > conf:
+        if len(results) > 1 and len(results[1]) > 6 and results[2] > conf:
             ocr = result[1]
 
-    return str(ocr)
+    return str(process_license_plate(ocr))
 
 
 class DetectionPredictor(BasePredictor):
-
     def get_annotator(self, img):
         return Annotator(img, line_width=self.args.line_thickness, example=str(self.model.names))
 
@@ -97,15 +113,40 @@ class DetectionPredictor(BasePredictor):
                 label = None if self.args.hide_labels else (
                     self.model.names[c] if self.args.hide_conf else f'{self.model.names[c]} {conf:.2f}')
                 ocr = getOCR(im0, xyxy)
-                # Unique identifier for the car (top-left coordinates and dimensions)
-                car_id = tuple(xyxy[:4])
-
+                ocr = process_license_plate(ocr)
                 if ocr != "":
-                    if car_id not in detected_plates:
-                        # Store the license plate for this car
-                        detected_plates[car_id] = ocr
-                        with open('car_license_plates.txt', 'a') as f:
-                            f.write(f'{ocr}\n')
+                    date_time = datetime.now()
+                    # Set the timezone to Indian Standard Time (IST)
+                    indian_tz = pytz.timezone('Asia/Kolkata')
+                    indian_date_time = date_time.astimezone(indian_tz)
+
+                    # Format the Indian date and time
+                    indian_formatted_date_time = indian_date_time.strftime('%Y-%m-%d %H:%M:%S %Z')
+
+                    # connecting to the database
+                    connection = sqlite3.connect("NGT2.db")
+                    #  cursor
+                    crsr = connection.cursor()
+
+                    # Check if the table has been created already
+                    global table_created
+                    if not table_created:
+                        # If not created, create the table in the database
+                        sql_command = """CREATE TABLE IF NOT EXISTS vehiclesLicense (vehicle_number VARCHAR(20), timestamp DATE);"""
+                        crsr.execute(sql_command)
+                        table_created = True  # Set the flag to indicate that the table has been created
+
+                    insert_query = "INSERT INTO vehiclesLicense(vehicle_number, timestamp) VALUES (?, ?)"
+                    crsr.execute(insert_query, (ocr, indian_formatted_date_time))
+
+                    sqlite_select_query = """SELECT * from vehiclesLicense"""
+                    crsr.execute(sqlite_select_query)
+                    records = crsr.fetchall()
+                    for row in records:
+                        with open('sqlite.txt', 'a') as f:
+                            f.write(f'{row[0]}                                  {row[1]} \n')
+                    crsr.close()
+                    connection.close()
                     label = ocr
                 self.annotator.box_label(xyxy, label, color=colors(c, True))
             if self.args.save_crop:
@@ -120,15 +161,18 @@ class DetectionPredictor(BasePredictor):
         return log_string
 
 
+table_created = False
+
+
 @hydra.main(version_base=None, config_path=str(DEFAULT_CONFIG.parent), config_name=DEFAULT_CONFIG.name)
 def predict(cfg):
-    reader = easyocr.Reader(['en'])  # Initialize the OCR reader
     cfg.model = cfg.model or "yolov8n.pt"
-    cfg.imgsz = check_imgsz(cfg.imgsz, min_dim=2)  # Check image size
+    cfg.imgsz = check_imgsz(cfg.imgsz, min_dim=2)  # check image size
     cfg.source = cfg.source if cfg.source is not None else ROOT / "assets"
     predictor = DetectionPredictor(cfg)
     predictor()
 
 
 if __name__ == "__main__":
+    reader = easyocr.Reader(['en'])
     predict()
