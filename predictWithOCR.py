@@ -14,15 +14,43 @@ from datetime import datetime
 import sqlite3
 import re
 import pytz
+import openpyxl
+
+
+def write_to_excel(vehicle_Details):
+    # Create a new Excel workbook
+    workbook = openpyxl.Workbook()
+    # Get the active sheet
+    sheet = workbook.active
+
+    # Write the headers
+    sheet.cell(row=1, column=1, value="Vehicle Number")
+    sheet.cell(row=1, column=2, value="Timestamp")
+
+    # Keep track of unique records using a set
+    unique_records = set()
+    for record in vehicle_Details:
+        # Convert each record to a tuple for immutability
+        unique_records.add(tuple(record))
+
+    # Write the records to the sheet
+    for i, row in enumerate(unique_records, start=2):
+        sheet.cell(row=i, column=1, value=row[0])
+        sheet.cell(row=i, column=2, value=row[1])
+
+    # Save the workbook
+    workbook.save("Patriotic Programmers.xlsx")
+
+
 
 def process_license_plate(ocr):
+    
     unique = set()
-
-    # Check if ocr has more than 6 characters and contains only alphanumeric characters
-    if len(ocr) >= 6 and ocr.isalnum():
+    # Check if ocr has more than 8 characters and contains only alphanumeric characters
+    if len(ocr) >= 8:
+        # Remove spaces and special characters except '-'
+        ocr = re.sub(r'[^\w\-]+', '', ocr)
         if ocr not in unique:
-            # Remove spaces and special characters from ocr using regular expressions
-            ocr = re.sub(r'\W+', '', ocr)
             unique.add(ocr)
             return ocr
     return ''
@@ -71,6 +99,7 @@ class DetectionPredictor(BasePredictor):
         return preds
 
     def write_results(self, idx, preds, batch):
+        global vehicle_Details
         p, im, im0 = batch
         log_string = ""
         if len(im.shape) == 3:
@@ -121,7 +150,10 @@ class DetectionPredictor(BasePredictor):
                     indian_date_time = date_time.astimezone(indian_tz)
 
                     # Format the Indian date and time
-                    indian_formatted_date_time = indian_date_time.strftime('%Y-%m-%d %H:%M:%S %Z')
+                    indian_formatted_date_time = indian_date_time.strftime(
+                        '%Y-%m-%d %H:%M:%S %Z')
+                    vehicle_Details.append((ocr, indian_formatted_date_time))
+                    #write_to_excel(record)
 
                     # connecting to the database
                     connection = sqlite3.connect("NGT2.db")
@@ -137,14 +169,16 @@ class DetectionPredictor(BasePredictor):
                         table_created = True  # Set the flag to indicate that the table has been created
 
                     insert_query = "INSERT INTO vehiclesLicense(vehicle_number, timestamp) VALUES (?, ?)"
-                    crsr.execute(insert_query, (ocr, indian_formatted_date_time))
+                    crsr.execute(
+                        insert_query, (ocr, indian_formatted_date_time))
 
                     sqlite_select_query = """SELECT * from vehiclesLicense"""
                     crsr.execute(sqlite_select_query)
                     records = crsr.fetchall()
                     for row in records:
                         with open('sqlite.txt', 'a') as f:
-                            f.write(f'{row[0]}                                  {row[1]} \n')
+                            f.write(
+                                f'{row[0]}                                  {row[1]} \n')
                     crsr.close()
                     connection.close()
                     label = ocr
@@ -162,6 +196,7 @@ class DetectionPredictor(BasePredictor):
 
 
 table_created = False
+vehicle_Details=[]
 
 
 @hydra.main(version_base=None, config_path=str(DEFAULT_CONFIG.parent), config_name=DEFAULT_CONFIG.name)
@@ -171,6 +206,7 @@ def predict(cfg):
     cfg.source = cfg.source if cfg.source is not None else ROOT / "assets"
     predictor = DetectionPredictor(cfg)
     predictor()
+    write_to_excel(vehicle_Details)
 
 
 if __name__ == "__main__":
